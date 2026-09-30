@@ -229,6 +229,9 @@ namespace BuzzTimer.Game
 
         private void InitialiseAudio()
         {
+            if (FindFirstObjectByType<AudioListener>() == null)
+                gameObject.AddComponent<AudioListener>();
+
             audioSource = gameObject.AddComponent<AudioSource>();
             audioSource.playOnAwake = false;
             audioSource.loop = false;
