@@ -6,6 +6,8 @@ namespace BuzzTimer.Game
 {
     public sealed class BuzzTimerGame : MonoBehaviour
     {
+        private static readonly float[] VictoryNotes = { 523.25f, 659.25f, 783.99f, 1046.50f, 783.99f, 880f, 987.77f, 1046.50f };
+
         private enum GameState { PlayerCount, PlayerNames, Binding, Ready, TurnReady, Timing, RoundResult, GameOver }
         private enum Language { Portuguese, English }
 
@@ -37,6 +39,12 @@ namespace BuzzTimer.Game
         private float inputEnabledAt;
         private float ledOffAt = -1f;
 
+        private AudioSource audioSource;
+        private AudioClip startSound;
+        private AudioClip stopSound;
+        private AudioClip challengeSound;
+        private AudioClip victorySound;
+
         private GUIStyle titleStyle, headingStyle, centerStyle, smallStyle, giantStyle;
         private GUIStyle panelStyle, buttonStyle, numberButtonStyle, selectedNumberButtonStyle, playerStyle, textFieldStyle;
         private Texture2D panelTexture, activePlayerTexture, inactivePlayerTexture, eliminatedTexture;
@@ -53,6 +61,7 @@ namespace BuzzTimer.Game
         {
             Application.targetFrameRate = 60;
             for (var i = 0; i < players.Length; i++) players[i] = new PlayerProfile();
+            InitialiseAudio();
         }
 
         private void Start() => SubscribeToInput();
@@ -97,16 +106,19 @@ namespace BuzzTimer.Game
             {
                 if (button == BuzzButton.Green)
                 {
+                    PlaySound(startSound);
                     state = GameState.Timing;
                     inputEnabledAt = Time.unscaledTime + 0.15f;
                 }
                 else if (button == BuzzButton.Yellow && previousPlayer >= 0)
                 {
+                    PlaySound(challengeSound);
                     ResolveChallenge(CurrentPlayer, previousPlayer);
                 }
             }
             else if (button == BuzzButton.Red)
             {
+                PlaySound(stopSound);
                 previousPlayer = CurrentPlayer;
                 currentIndex = (currentIndex + 1) % activePlayers.Count;
                 state = GameState.TurnReady;
@@ -192,6 +204,7 @@ namespace BuzzTimer.Game
             if (activePlayers.Count == 1)
             {
                 state = GameState.GameOver;
+                Invoke(nameof(PlayVictorySound), 0.82f);
                 FlashBuzzer(players[activePlayers[0]].Buzzer, 2f);
                 return;
             }
@@ -212,6 +225,92 @@ namespace BuzzTimer.Game
         {
             BuzzInputManager.Instance?.SetPlayerLeds(false, false, false, false);
             ledOffAt = -1f;
+        }
+
+        private void InitialiseAudio()
+        {
+            audioSource = gameObject.AddComponent<AudioSource>();
+            audioSource.playOnAwake = false;
+            audioSource.loop = false;
+            audioSource.spatialBlend = 0f;
+
+            startSound = CreateStartSound();
+            stopSound = CreateStopSound();
+            challengeSound = CreateChallengeSound();
+            victorySound = CreateVictorySound();
+        }
+
+        private void PlaySound(AudioClip clip)
+        {
+            if (audioSource == null || clip == null) return;
+            audioSource.Stop();
+            audioSource.PlayOneShot(clip);
+        }
+
+        private void PlayVictorySound() => PlaySound(victorySound);
+
+        private static AudioClip CreateStartSound()
+        {
+            return CreateSynthClip("Timer Start", 0.48f, (time, duration) =>
+            {
+                var frequency = time < 0.20f ? 660f : time < 0.36f ? 880f : 1100f;
+                return Sine(time, frequency) * Envelope(time, duration, 0.012f, 0.15f) * 0.38f;
+            });
+        }
+
+        private static AudioClip CreateStopSound()
+        {
+            return CreateSynthClip("Timer Stop", 0.62f, (time, duration) =>
+            {
+                var wobble = 1f + 0.035f * Mathf.Sin(2f * Mathf.PI * 28f * time);
+                var tone = 0.70f * Sine(time, 145f * wobble) + 0.30f * Sine(time, 290f * wobble);
+                return tone * Envelope(time, duration, 0.006f, 0.12f) * 0.42f;
+            });
+        }
+
+        private static AudioClip CreateChallengeSound()
+        {
+            return CreateSynthClip("Challenge", 0.82f, (time, duration) =>
+            {
+                var frequency = time < 0.18f ? 440f : time < 0.36f ? 554.37f : time < 0.54f ? 659.25f : 880f;
+                var pulse = 0.72f + 0.28f * Mathf.Sin(2f * Mathf.PI * 9f * time);
+                return (0.82f * Sine(time, frequency) + 0.18f * Sine(time, frequency * 2f))
+                    * pulse * Envelope(time, duration, 0.008f, 0.16f) * 0.34f;
+            });
+        }
+
+        private static AudioClip CreateVictorySound()
+        {
+            return CreateSynthClip("Victory", 2.35f, (time, duration) =>
+            {
+                var beat = Mathf.Min(7, Mathf.FloorToInt(time / 0.25f));
+                var localTime = time - beat * 0.25f;
+                var noteLength = beat == 7 ? 0.60f : 0.23f;
+                var noteEnvelope = Envelope(localTime, noteLength, 0.008f, beat == 7 ? 0.42f : 0.10f);
+                var frequency = VictoryNotes[beat];
+                var chord = Sine(time, frequency) + 0.32f * Sine(time, frequency * 1.5f) + 0.18f * Sine(time, frequency * 2f);
+                return chord * noteEnvelope * Envelope(time, duration, 0.01f, 0.25f) * 0.25f;
+            });
+        }
+
+        private static AudioClip CreateSynthClip(string name, float duration, System.Func<float, float, float> sample)
+        {
+            const int sampleRate = 44100;
+            var samples = Mathf.CeilToInt(duration * sampleRate);
+            var data = new float[samples];
+            for (var i = 0; i < samples; i++) data[i] = Mathf.Clamp(sample(i / (float)sampleRate, duration), -1f, 1f);
+            var clip = AudioClip.Create(name, samples, 1, sampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
+        private static float Sine(float time, float frequency) => Mathf.Sin(2f * Mathf.PI * frequency * time);
+
+        private static float Envelope(float time, float duration, float attack, float release)
+        {
+            var attackGain = Mathf.Clamp01(time / attack);
+            var releaseGain = Mathf.Clamp01((duration - time) / release);
+            return attackGain * releaseGain;
         }
 
         private void ChangePlayers()
